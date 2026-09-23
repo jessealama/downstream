@@ -25,28 +25,25 @@ export function assert(condition: boolean, message: string): asserts condition {
   if (!condition) abort(message);
 }
 
-export function getInput(name: string): string {
-  return core.getInput(name, { required: true });
-}
+export class Repo {
+  public readonly owner: string;
+  public readonly repo: string;
 
-export function getInputOpt(name: string): string | null {
-  const value = core.getInput(name, { required: false });
-  return value === "" ? null : value;
-}
+  constructor(obj: { owner: string; repo: string });
+  constructor(owner: string, repo: string);
+  constructor(fst: { owner: string; repo: string } | string, repo?: string) {
+    if (typeof fst === "object") {
+      this.repo = fst.repo;
+      this.owner = fst.owner;
+    } else {
+      this.owner = fst;
+      this.repo = repo!;
+    }
+  }
 
-export function parseBool(input: string): boolean {
-  return input.trim().toLowerCase() === "true";
-}
-
-export interface Repo {
-  owner: string;
-  repo: string;
-}
-
-export function parseRepo(input: string): Repo {
-  const match = /^([^/]+)\/([^/]+)$/.exec(input);
-  assert(match !== null, `Expected "owner/repo", not "${input}"`);
-  return { owner: match[1], repo: match[2] };
+  get fullName(): string {
+    return `${this.owner}/${this.repo}`;
+  }
 }
 
 export async function getPr(octo: Octokit, repo: Repo, n: number): Promise<Pr> {

@@ -25068,21 +25068,22 @@ function abort(reason) {
 function assert(condition, message) {
   if (!condition) abort(message);
 }
-function getInput2(name) {
-  return getInput(name, { required: true });
-}
-function getInputOpt(name) {
-  const value = getInput(name, { required: false });
-  return value === "" ? null : value;
-}
-function parseBool(input) {
-  return input.trim().toLowerCase() === "true";
-}
-function parseRepo(input) {
-  const match = /^([^/]+)\/([^/]+)$/.exec(input);
-  assert(match !== null, `Expected "owner/repo", not "${input}"`);
-  return { owner: match[1], repo: match[2] };
-}
+var Repo = class {
+  owner;
+  repo;
+  constructor(fst, repo) {
+    if (typeof fst === "object") {
+      this.repo = fst.repo;
+      this.owner = fst.owner;
+    } else {
+      this.owner = fst;
+      this.repo = repo;
+    }
+  }
+  get fullName() {
+    return `${this.owner}/${this.repo}`;
+  }
+};
 async function findPrFor(octo, repo, branchName, options = {}) {
   const { state = "all", headOwner = repo.owner } = options;
   const { data } = await octo.rest.pulls.list({
@@ -25094,6 +25095,25 @@ async function findPrFor(octo, repo, branchName, options = {}) {
     per_page: 1
   });
   return data[0];
+}
+
+// actions/lib/input.ts
+function getInput2(name, parser) {
+  const value = getInput(name, { required: true });
+  return parser ? parser(value) : value;
+}
+function getInputOpt(name, parser) {
+  const value = getInput(name, { required: false });
+  if (value === "") return null;
+  return parser ? parser(value) : value;
+}
+function parseBool(input) {
+  return input.trim().toLowerCase() === "true";
+}
+function parseRepo(input) {
+  const match = /^([^/]+)\/([^/]+)$/.exec(input);
+  assert(match !== null, `Expected "owner/repo", not "${input}"`);
+  return new Repo(match[1], match[2]);
 }
 
 // actions/export-pr-create/main.ts

@@ -4,17 +4,14 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import * as github from "@actions/github";
 
+import { getInput, getInputOpt, parseBool, parseRepo } from "../lib/input";
 import type { BuildReport } from "../lib/reports";
 import {
   abort,
   assert,
   exit,
   findPrFor,
-  getInput,
-  getInputOpt,
   type Octokit,
-  parseBool,
-  parseRepo,
   type Repo,
 } from "../lib/util";
 

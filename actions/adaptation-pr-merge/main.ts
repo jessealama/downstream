@@ -3,25 +3,25 @@ import * as exec from "@actions/exec";
 import * as github from "@actions/github";
 
 import { RequestError } from "@octokit/request-error";
+import { getInput, parseRepo } from "../lib/input";
 import { postOrUpdateStatus } from "../lib/status-message";
 import {
   abort,
   addAndCommit,
-  getInput,
   getPr,
   isAncestor,
   type ListPr,
-  parseRepo,
   type Pr,
+  Repo,
   sleep,
   upstreamPrNumberFor,
 } from "../lib/util";
 
 const appToken = getInput("app-token");
 const appSlug = getInput("app-slug");
-const upstreamRepo = parseRepo(getInput("upstream-repo"));
+const upstreamRepo = getInput("upstream-repo", parseRepo);
 const upstreamRev = getInput("upstream-rev");
-const downstreamRepo = github.context.repo;
+const downstreamRepo = new Repo(github.context.repo);
 const downstreamClone = getInput("downstream-clone");
 const downstreamLabel = getInput("downstream-label");
 const downstreamLabelMerge = getInput("downstream-label-merge");
