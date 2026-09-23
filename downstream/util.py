@@ -79,13 +79,6 @@ class Subrepo:
     def path(self) -> Path:
         return Path(self.name)
 
-    @property
-    def manifest_path(self) -> Path:
-        return self.path / "lake-manifest.json"
-
-    def find_manifest_paths(self) -> list[Path]:
-        return sorted(self.path.glob("**/lake-manifest.json"))
-
 
 def load_subrepos(path: Path) -> Generator[Subrepo]:
     for name, data in tomllib.loads(path.read_text()).items():

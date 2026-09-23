@@ -25,6 +25,10 @@ export function assert(condition: boolean, message: string): asserts condition {
   if (!condition) abort(message);
 }
 
+export function unreachable(value: never): never {
+  abort(`Unreachable code reached with value: ${JSON.stringify(value)}`);
+}
+
 export function runIn(cwd: string) {
   return async function (
     cmd: string,
