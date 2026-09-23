@@ -14843,7 +14843,7 @@ var require_util4 = __commonJS({
     var { getEncoding } = require_encoding();
     var { serializeAMimeType, parseMIMEType } = require_data_url();
     var { types } = require("node:util");
-    var { StringDecoder: StringDecoder2 } = require("string_decoder");
+    var { StringDecoder } = require("string_decoder");
     var { btoa } = require("node:buffer");
     var staticPropertyDescriptors = {
       enumerable: true,
@@ -14934,7 +14934,7 @@ var require_util4 = __commonJS({
             dataURL += serializeAMimeType(parsed);
           }
           dataURL += ";base64,";
-          const decoder = new StringDecoder2("latin1");
+          const decoder = new StringDecoder("latin1");
           for (const chunk of bytes) {
             dataURL += btoa(decoder.write(chunk));
           }
@@ -14963,7 +14963,7 @@ var require_util4 = __commonJS({
         }
         case "BinaryString": {
           let binaryString = "";
-          const decoder = new StringDecoder2("latin1");
+          const decoder = new StringDecoder("latin1");
           for (const chunk of bytes) {
             binaryString += decoder.write(chunk);
           }
@@ -20179,9 +20179,6 @@ var _summary = new Summary();
 // node_modules/.pnpm/@actions+core@3.0.1/node_modules/@actions/core/lib/platform.js
 var import_os2 = __toESM(require("os"), 1);
 
-// node_modules/.pnpm/@actions+exec@3.0.0/node_modules/@actions/exec/lib/exec.js
-var import_string_decoder = require("string_decoder");
-
 // node_modules/.pnpm/@actions+exec@3.0.0/node_modules/@actions/exec/lib/toolrunner.js
 var os3 = __toESM(require("os"), 1);
 var events = __toESM(require("events"), 1);
@@ -20894,38 +20891,6 @@ function exec(commandLine, args, options) {
     args = commandArgs.slice(1).concat(args || []);
     const runner = new ToolRunner(toolPath, args, options);
     return runner.exec();
-  });
-}
-function getExecOutput(commandLine, args, options) {
-  return __awaiter5(this, void 0, void 0, function* () {
-    var _a, _b;
-    let stdout = "";
-    let stderr = "";
-    const stdoutDecoder = new import_string_decoder.StringDecoder("utf8");
-    const stderrDecoder = new import_string_decoder.StringDecoder("utf8");
-    const originalStdoutListener = (_a = options === null || options === void 0 ? void 0 : options.listeners) === null || _a === void 0 ? void 0 : _a.stdout;
-    const originalStdErrListener = (_b = options === null || options === void 0 ? void 0 : options.listeners) === null || _b === void 0 ? void 0 : _b.stderr;
-    const stdErrListener = (data) => {
-      stderr += stderrDecoder.write(data);
-      if (originalStdErrListener) {
-        originalStdErrListener(data);
-      }
-    };
-    const stdOutListener = (data) => {
-      stdout += stdoutDecoder.write(data);
-      if (originalStdoutListener) {
-        originalStdoutListener(data);
-      }
-    };
-    const listeners = Object.assign(Object.assign({}, options === null || options === void 0 ? void 0 : options.listeners), { stdout: stdOutListener, stderr: stdErrListener });
-    const exitCode = yield exec(commandLine, args, Object.assign(Object.assign({}, options), { listeners }));
-    stdout += stdoutDecoder.end();
-    stderr += stderrDecoder.end();
-    return {
-      exitCode,
-      stdout,
-      stderr
-    };
   });
 }
 
@@ -25068,6 +25033,21 @@ function abort(reason) {
 function assert(condition, message) {
   if (!condition) abort(message);
 }
+function runIn(cwd) {
+  return async function(cmd, args, options) {
+    return await exec(cmd, args, { ...options, cwd });
+  };
+}
+function captureIn(cwd) {
+  const run2 = runIn(cwd);
+  return async function(cmd, args) {
+    let stdout = "";
+    await run2(cmd, args, {
+      listeners: { stdout: (data) => stdout += data.toString() }
+    });
+    return stdout.trim();
+  };
+}
 var Repo = class {
   owner;
   repo;
@@ -25148,15 +25128,8 @@ var target = (function() {
     octo: getOctokit(targetToken)
   };
 })();
-async function dRun(cmd, args, options) {
-  return await exec(cmd, args, { ...options, cwd: downstreamPath });
-}
-async function dCapture(cmd, args) {
-  const { stdout } = await getExecOutput(cmd, args, {
-    cwd: downstreamPath
-  });
-  return stdout.trim();
-}
+var dRun = runIn(downstreamPath);
+var dCapture = captureIn(downstreamPath);
 function authUrl(token, repo) {
   return `https://x-access-token:${token}@github.com/${repo.owner}/${repo.repo}.git`;
 }

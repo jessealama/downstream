@@ -9,8 +9,10 @@ import type { BuildReport } from "../lib/reports";
 import {
   abort,
   assert,
+  captureIn,
   exit,
   findPrFor,
+  runIn,
   type Octokit,
   type Repo,
 } from "../lib/util";
@@ -58,20 +60,8 @@ const target: TargetOpts | undefined = (function () {
   };
 })();
 
-async function dRun(
-  cmd: string,
-  args: string[],
-  options?: exec.ExecOptions,
-): Promise<number> {
-  return await exec.exec(cmd, args, { ...options, cwd: downstreamPath });
-}
-
-async function dCapture(cmd: string, args: string[]): Promise<string> {
-  const { stdout } = await exec.getExecOutput(cmd, args, {
-    cwd: downstreamPath,
-  });
-  return stdout.trim();
-}
+const dRun = runIn(downstreamPath);
+const dCapture = captureIn(downstreamPath);
 
 function authUrl(token: string, repo: { owner: string; repo: string }): string {
   return `https://x-access-token:${token}@github.com/${repo.owner}/${repo.repo}.git`;

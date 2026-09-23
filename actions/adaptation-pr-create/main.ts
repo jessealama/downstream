@@ -13,7 +13,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import * as core from "@actions/core";
-import * as exec from "@actions/exec";
 import * as github from "@actions/github";
 import { RequestError } from "@octokit/request-error";
 import type { GetResponseDataTypeFromEndpointMethod as Response } from "@octokit/types";
@@ -30,6 +29,7 @@ import {
   getPr,
   isAncestor,
   Repo,
+  runIn,
   type ListPr,
   type Octokit,
   type Pr,
@@ -54,13 +54,7 @@ const downstreamLabelMerge = getInput("downstream-label-merge");
 const overrideToolchain = getInputOpt("override-toolchain");
 const octo = github.getOctokit(appToken);
 
-async function dRun(
-  cmd: string,
-  args: string[],
-  options?: exec.ExecOptions,
-): Promise<number> {
-  return await exec.exec(cmd, args, { ...options, cwd: downstreamClone });
-}
+const dRun = runIn(downstreamClone);
 
 function ensurePrIsUnmerged(pr: Pr): void {
   if (pr.merged_at !== null) exit("PR is merged, exiting...");

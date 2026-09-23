@@ -25031,6 +25031,11 @@ function abort(reason) {
 function assert(condition, message) {
   if (!condition) abort(message);
 }
+function runIn(cwd) {
+  return async function(cmd, args, options) {
+    return await exec(cmd, args, { ...options, cwd });
+  };
+}
 var Repo = class {
   owner;
   repo;
@@ -25174,9 +25179,7 @@ var downstreamLabel = getInput2("downstream-label");
 var downstreamLabelMerge = getInput2("downstream-label-merge");
 var overrideToolchain = getInputOpt("override-toolchain");
 var octo = getOctokit(appToken);
-async function dRun(cmd, args, options) {
-  return await exec(cmd, args, { ...options, cwd: downstreamClone });
-}
+var dRun = runIn(downstreamClone);
 function ensurePrIsUnmerged(pr) {
   if (pr.merged_at !== null) exit("PR is merged, exiting...");
   info("PR is unmerged, continuing...");

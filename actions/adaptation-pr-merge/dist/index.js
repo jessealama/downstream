@@ -25029,6 +25029,21 @@ function abort(reason) {
 function assert(condition, message) {
   if (!condition) abort(message);
 }
+function runIn(cwd) {
+  return async function(cmd, args, options) {
+    return await exec(cmd, args, { ...options, cwd });
+  };
+}
+function captureIn(cwd) {
+  const run2 = runIn(cwd);
+  return async function(cmd, args) {
+    let stdout = "";
+    await run2(cmd, args, {
+      listeners: { stdout: (data) => stdout += data.toString() }
+    });
+    return stdout.trim();
+  };
+}
 var Repo = class {
   owner;
   repo;
@@ -25146,16 +25161,8 @@ var downstreamClone = getInput2("downstream-clone");
 var downstreamLabel = getInput2("downstream-label");
 var downstreamLabelMerge = getInput2("downstream-label-merge");
 var octo = getOctokit(appToken);
-async function dRun(cmd, args, options) {
-  return await exec(cmd, args, { ...options, cwd: downstreamClone });
-}
-async function dCapture(cmd, args) {
-  let stdout = "";
-  await dRun(cmd, args, {
-    listeners: { stdout: (data) => stdout += data.toString() }
-  });
-  return stdout.trim();
-}
+var dRun = runIn(downstreamClone);
+var dCapture = captureIn(downstreamClone);
 async function tell(aPr, body) {
   await postOrUpdateStatus({
     octo,

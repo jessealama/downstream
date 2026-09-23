@@ -25,6 +25,27 @@ export function assert(condition: boolean, message: string): asserts condition {
   if (!condition) abort(message);
 }
 
+export function runIn(cwd: string) {
+  return async function (
+    cmd: string,
+    args: string[],
+    options?: exec.ExecOptions,
+  ): Promise<number> {
+    return await exec.exec(cmd, args, { ...options, cwd });
+  };
+}
+
+export function captureIn(cwd: string) {
+  const run = runIn(cwd);
+  return async function (cmd: string, args: string[]): Promise<string> {
+    let stdout = "";
+    await run(cmd, args, {
+      listeners: { stdout: (data) => (stdout += data.toString()) },
+    });
+    return stdout.trim();
+  };
+}
+
 export class Repo {
   public readonly owner: string;
   public readonly repo: string;
