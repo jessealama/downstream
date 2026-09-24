@@ -7,6 +7,7 @@ export interface BuildReportRepo {
   name: string;
   critical: boolean;
   green: boolean;
+  blocked_by?: string[]; // deps whose failed build caused this build's skip
   build: BuildReportPhase;
   test: BuildReportPhase;
   lint: BuildReportPhase;

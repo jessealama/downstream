@@ -24379,7 +24379,8 @@ function renderTable(repos) {
   ];
   for (const repo of repos) {
     const critical = repo.critical ? "\u2705" : "";
-    const build = status(repo.build);
+    const blockedBy = repo.blocked_by ?? [];
+    const build = blockedBy.length > 0 ? `${status(repo.build)} blocked by ${blockedBy.join(", ")}` : status(repo.build);
     const test = status(repo.test);
     const lint = status(repo.lint);
     lines.push(`| ${repo.name} | ${critical} | ${build} | ${test} | ${lint} |`);
