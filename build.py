@@ -175,10 +175,10 @@ def main() -> None:
 
     run("lake", "--version")
 
+    blocked_by: dict[str, list[str]] = {}
     report_build = defaultdict(Phase)
     report_test = defaultdict(Phase)
     report_lint = defaultdict(Phase)
-    blocked_by: dict[str, list[str]] = {}
     if not args.no_build:
         do_build(subrepos, report_build, blocked_by, graph, mappings_dir)
     if args.test:
@@ -213,8 +213,6 @@ def main() -> None:
                 "name": sub.name,
                 "critical": sub.critical,
                 "green": sub.name in green_repos,
-                # Direct dependencies whose build did not succeed, causing this
-                # repo's build to be skipped.
                 "blocked_by": blocked_by.get(sub.name, []),
                 "build": dataclasses.asdict(report_build[sub.name]),
                 "test": dataclasses.asdict(report_test[sub.name]),
