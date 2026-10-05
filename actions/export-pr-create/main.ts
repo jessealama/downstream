@@ -64,8 +64,11 @@ const prBody = getInputOpt("pr-body");
 const prExplanation = getInputOpt("pr-explanation");
 // Export options
 const updateToolchains = getInput("update-toolchains", parseBool);
+const toolchainInteresting = getInput("toolchain-interesting", parseBool);
 const lakefileEdits = getInputOpt("lakefile-edits", parseLakefileEdits) ?? [];
+const lakefileInteresting = getInput("lakefile-interesting", parseBool);
 const updateManifests = getInput("update-manifests", parseBool);
+const manifestInteresting = getInput("manifest-interesting", parseBool);
 
 core.setSecret(downstreamToken);
 core.setSecret(sourceToken);
@@ -197,32 +200,49 @@ async function pushToRepo(
   ]);
 }
 
-function isNonemptyExport(exitCode: number): boolean {
-  if (exitCode === 10 /* EXIT_EMPTY */) {
-    return false; // Exit code returned by --fail-if-empty when empty
-  } else if (exitCode === 0) {
-    return true; // Successful export, so there are changes
-  } else {
-    abort(`export.py exited with code ${exitCode}`);
-  }
+// Glob pathspecs matching the selected kinds of files anywhere in the repo.
+function filePathspecs(
+  magic: string,
+  kinds: { toolchains: boolean; lakefiles: boolean; manifests: boolean },
+): string[] {
+  const patterns: string[] = [];
+  if (kinds.toolchains) patterns.push("lean-toolchain");
+  if (kinds.lakefiles) patterns.push("lakefile.toml", "lakefile.lean");
+  if (kinds.manifests) patterns.push("lake-manifest.json");
+  return patterns.map((p) => `:(${magic})**/${p}`);
+}
+
+function boringPathspecs(): string[] {
+  return filePathspecs("exclude,glob", {
+    toolchains: !toolchainInteresting,
+    lakefiles: !lakefileInteresting,
+    manifests: !manifestInteresting,
+  });
+}
+
+async function isInterestingExport(onto: string): Promise<boolean> {
+  // If only boring files are changed, the export is not interesting.
+  const changed = await cCapture("git", [
+    ...["diff", "--name-only", "-z", onto, "HEAD", "--"],
+    ...boringPathspecs(),
+  ]);
+  const changedPaths = changed.split("\0").filter((p) => p !== "");
+  core.info(`Export changes ${changedPaths.length} interesting file(s).`);
+  return changedPaths.length > 0;
 }
 
 async function runExport(onto: string): Promise<boolean> {
   core.info(`Exporting ${subrepo} onto ${onto}...`);
-  const exitCode = await cRun(
-    scriptPath("export.py"),
-    [
-      ...[".", subrepo, "--fail-if-empty"],
-      ...["--onto", onto],
-      ...["--message", prTitle],
-      ...(updateToolchains ? ["--update-toolchains"] : []),
-      ...lakefileEdits.flatMap(([p, r]) => ["--edit-lakefile", p, r]),
-      ...(updateManifests ? ["--update-manifests"] : []),
-    ],
-    { ignoreReturnCode: true },
-  );
+  await cRun(scriptPath("export.py"), [
+    ...[".", subrepo],
+    ...["--onto", onto],
+    ...["--message", prTitle],
+    ...(updateToolchains ? ["--update-toolchains"] : []),
+    ...lakefileEdits.flatMap(([p, r]) => ["--edit-lakefile", p, r]),
+    ...(updateManifests ? ["--update-manifests"] : []),
+  ]);
 
-  return isNonemptyExport(exitCode);
+  return await isInterestingExport(onto);
 }
 
 async function updateSubrepo(sha: string): Promise<string | null> {
@@ -264,11 +284,11 @@ async function exportSameBranch(sha: string): Promise<boolean> {
 }
 
 function excludePathspecs(): string[] {
-  const patterns: string[] = [];
-  if (updateToolchains) patterns.push("lean-toolchain");
-  if (lakefileEdits.length > 0) patterns.push("lakefile.toml", "lakefile.lean");
-  if (updateManifests) patterns.push("lake-manifest.json");
-  return patterns.map((p) => `:(glob)**/${p}`);
+  return filePathspecs("glob", {
+    toolchains: updateToolchains,
+    lakefiles: lakefileEdits.length > 0,
+    manifests: updateManifests,
+  });
 }
 
 // Merge a commit from the source branch, resolving conflicts in favor of the
@@ -315,15 +335,15 @@ async function exportTargetBranch(sha: string): Promise<boolean> {
 
   // Export downstream changes on top
   await cRun("git", ["switch", "--detach", sha]);
-  const nonempty = await runExport(mergeSha);
+  const interesting = await runExport(mergeSha);
 
   // Push merge commit now, to prepare the branch for the export PR
-  if (nonempty && pr) {
+  if (interesting && pr) {
     core.info(`Pushing merge commit ${mergeSha} to ${targetBranch}...`);
     await pushToRepo(targetRepo, targetToken, mergeSha, targetBranch);
   }
 
-  return nonempty;
+  return interesting;
 }
 
 async function createExportPr(buildReport: BuildReport): Promise<number> {
@@ -387,13 +407,13 @@ async function run(): Promise<void> {
     );
 
   core.info(`Exporting using method "${method}"...`);
-  const nonempty =
+  const interesting =
     method === "same-branch"
       ? await exportSameBranch(buildReport.commit_sha)
       : await exportTargetBranch(buildReport.commit_sha);
 
   // Create export PR or push to target branch, depending on settings
-  if (nonempty) {
+  if (interesting) {
     if (pr) {
       const prNumber = await createExportPr(buildReport);
       core.setOutput("pr-created", true);
@@ -407,8 +427,8 @@ async function run(): Promise<void> {
   } else {
     core.notice(
       pr
-        ? "Export is empty, not creating an export PR."
-        : "Export is empty, nothing to push.",
+        ? "Export has no interesting changes, not creating an export PR."
+        : "Export has no interesting changes, nothing to push.",
     );
   }
 

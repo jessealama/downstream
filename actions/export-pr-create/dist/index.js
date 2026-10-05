@@ -25143,8 +25143,11 @@ var prTitle = getInputOpt("pr-title") ?? `chore: adaptations from ${downstreamRe
 var prBody = getInputOpt("pr-body");
 var prExplanation = getInputOpt("pr-explanation");
 var updateToolchains = getInput2("update-toolchains", parseBool);
+var toolchainInteresting = getInput2("toolchain-interesting", parseBool);
 var lakefileEdits = getInputOpt("lakefile-edits", parseLakefileEdits) ?? [];
+var lakefileInteresting = getInput2("lakefile-interesting", parseBool);
 var updateManifests = getInput2("update-manifests", parseBool);
+var manifestInteresting = getInput2("manifest-interesting", parseBool);
 setSecret(downstreamToken);
 setSecret(sourceToken);
 setSecret(targetToken);
@@ -25235,30 +25238,40 @@ async function pushToRepo(repo, token, sha, branch, force = false) {
     `${sha}:refs/heads/${branch}`
   ]);
 }
-function isNonemptyExport(exitCode) {
-  if (exitCode === 10) {
-    return false;
-  } else if (exitCode === 0) {
-    return true;
-  } else {
-    abort(`export.py exited with code ${exitCode}`);
-  }
+function filePathspecs(magic, kinds) {
+  const patterns = [];
+  if (kinds.toolchains) patterns.push("lean-toolchain");
+  if (kinds.lakefiles) patterns.push("lakefile.toml", "lakefile.lean");
+  if (kinds.manifests) patterns.push("lake-manifest.json");
+  return patterns.map((p) => `:(${magic})**/${p}`);
+}
+function boringPathspecs() {
+  return filePathspecs("exclude,glob", {
+    toolchains: !toolchainInteresting,
+    lakefiles: !lakefileInteresting,
+    manifests: !manifestInteresting
+  });
+}
+async function isInterestingExport(onto) {
+  const changed = await cCapture("git", [
+    ...["diff", "--name-only", "-z", onto, "HEAD", "--"],
+    ...boringPathspecs()
+  ]);
+  const changedPaths = changed.split("\0").filter((p) => p !== "");
+  info(`Export changes ${changedPaths.length} interesting file(s).`);
+  return changedPaths.length > 0;
 }
 async function runExport(onto) {
   info(`Exporting ${subrepo} onto ${onto}...`);
-  const exitCode = await cRun(
-    scriptPath("export.py"),
-    [
-      ...[".", subrepo, "--fail-if-empty"],
-      ...["--onto", onto],
-      ...["--message", prTitle],
-      ...updateToolchains ? ["--update-toolchains"] : [],
-      ...lakefileEdits.flatMap(([p, r]) => ["--edit-lakefile", p, r]),
-      ...updateManifests ? ["--update-manifests"] : []
-    ],
-    { ignoreReturnCode: true }
-  );
-  return isNonemptyExport(exitCode);
+  await cRun(scriptPath("export.py"), [
+    ...[".", subrepo],
+    ...["--onto", onto],
+    ...["--message", prTitle],
+    ...updateToolchains ? ["--update-toolchains"] : [],
+    ...lakefileEdits.flatMap(([p, r]) => ["--edit-lakefile", p, r]),
+    ...updateManifests ? ["--update-manifests"] : []
+  ]);
+  return await isInterestingExport(onto);
 }
 async function updateSubrepo(sha) {
   await cRun("git", ["switch", "--detach", sha]);
@@ -25289,11 +25302,11 @@ async function exportSameBranch(sha) {
   return await runExport(baseSha);
 }
 function excludePathspecs() {
-  const patterns = [];
-  if (updateToolchains) patterns.push("lean-toolchain");
-  if (lakefileEdits.length > 0) patterns.push("lakefile.toml", "lakefile.lean");
-  if (updateManifests) patterns.push("lake-manifest.json");
-  return patterns.map((p) => `:(glob)**/${p}`);
+  return filePathspecs("glob", {
+    toolchains: updateToolchains,
+    lakefiles: lakefileEdits.length > 0,
+    manifests: updateManifests
+  });
 }
 async function mergeSource(sha, message) {
   const pathspecs = excludePathspecs();
@@ -25326,12 +25339,12 @@ async function exportTargetBranch(sha) {
   await mergeSource(baseSha, `chore: merge '${baseCommit.rev}'`);
   const mergeSha = await cCapture("git", ["rev-parse", "HEAD"]);
   await cRun("git", ["switch", "--detach", sha]);
-  const nonempty = await runExport(mergeSha);
-  if (nonempty && pr) {
+  const interesting = await runExport(mergeSha);
+  if (interesting && pr) {
     info(`Pushing merge commit ${mergeSha} to ${targetBranch}...`);
     await pushToRepo(targetRepo, targetToken, mergeSha, targetBranch);
   }
-  return nonempty;
+  return interesting;
 }
 async function createExportPr(buildReport) {
   info(`Pushing export commit(s) to ${prRepo.fullName}:${prBranch}...`);
@@ -25381,8 +25394,8 @@ async function run() {
       "notice"
     );
   info(`Exporting using method "${method}"...`);
-  const nonempty = method === "same-branch" ? await exportSameBranch(buildReport.commit_sha) : await exportTargetBranch(buildReport.commit_sha);
-  if (nonempty) {
+  const interesting = method === "same-branch" ? await exportSameBranch(buildReport.commit_sha) : await exportTargetBranch(buildReport.commit_sha);
+  if (interesting) {
     if (pr) {
       const prNumber = await createExportPr(buildReport);
       setOutput("pr-created", true);
@@ -25395,7 +25408,7 @@ async function run() {
     }
   } else {
     notice(
-      pr ? "Export is empty, not creating an export PR." : "Export is empty, nothing to push."
+      pr ? "Export has no interesting changes, not creating an export PR." : "Export has no interesting changes, nothing to push."
     );
   }
   info(

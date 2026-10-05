@@ -149,14 +149,32 @@ inputs:
       target to the downstream repo's toolchain.
     default: false
 
+  toolchain-interesting:
+    description: >
+      Whether a toolchain file update alone is interesting enough to warrant an
+      export PR.
+    default: false
+
   lakefile-edits:
     description: >
       Regex replacements to apply to all lakefiles, one per line, of the form
       `pattern -> replacement`.
 
+  lakefile-interesting:
+    description: >
+      Whether a lakefile update alone is interesting enough to warrant an export
+      PR.
+    default: true
+
   update-manifests:
     description: >
       Run `lake update` for all manifests after applying the other options.
+    default: false
+
+  manifest-interesting:
+    description: >
+      Whether a manifest file update alone is interesting enough to warrant an
+      export PR.
     default: false
 
 outputs:
