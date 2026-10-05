@@ -2,10 +2,10 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import * as github from "@actions/github";
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 
 import { getInput, getInputOpt, parseBool, parseRepo } from "../lib/input";
 import type { BuildReport } from "../lib/reports";
+import { githubRepo, loadSubrepoFromGithub } from "../lib/repos";
 import {
   abort,
   assert,
@@ -15,6 +15,7 @@ import {
   ListPr,
   Repo,
   runIn,
+  scriptPath,
 } from "../lib/util";
 
 type Method = "same-branch" | "target-branch";
@@ -47,16 +48,13 @@ const method = getInput("method", parseMethod);
 const downstreamRepo = getInput("downstream-repo", parseRepo);
 const downstreamToken = getInput("downstream-token");
 // Source repo
-const sourceRepo = getInput("source-repo", parseRepo);
 const sourceToken = getInput("source-token");
 // Target repo
-const targetRepo = getInputOpt("target-repo", parseRepo) ?? sourceRepo;
-const targetBranch = getInput("target-branch");
 const targetToken = getInputOpt("target-token") ?? sourceToken;
 // Export PRs
 const pr = getInput("pr", parseBool);
-const prRepo = getInputOpt("pr-repo", parseRepo) ?? targetRepo;
-const prBranch = getInputOpt("pr-branch") ?? `${downstreamRepo.repo}-export`;
+const prRepoInput = getInputOpt("pr-repo", parseRepo);
+const prBranchInput = getInputOpt("pr-branch");
 const prToken = getInputOpt("pr-token") ?? targetToken;
 const prTitle =
   getInputOpt("pr-title") ?? `chore: adaptations from ${downstreamRepo.repo}`;
@@ -75,14 +73,11 @@ core.setSecret(sourceToken);
 core.setSecret(targetToken);
 core.setSecret(prToken);
 
+const downstreamOcto = github.getOctokit(downstreamToken);
 const targetOcto = github.getOctokit(targetToken);
 
 const cRun = runIn(clonePath);
 const cCapture = captureIn(clonePath);
-
-function scriptPath(name: string): string {
-  return path.resolve(__dirname, "../../..", name);
-}
 
 function authUrl(token: string, repo: Repo): string {
   return `https://x-access-token:${token}@github.com/${repo.fullName}.git`;
@@ -93,15 +88,46 @@ async function loadBuildReport(): Promise<BuildReport> {
   return JSON.parse(raw) as BuildReport;
 }
 
+// Repos and revs for the export, mostly loaded from repos.toml.
+interface ExportConfig {
+  sourceRepo: Repo;
+  sourceRev: string;
+  targetRepo: Repo;
+  targetBranch: string;
+  prRepo: Repo;
+  prBranch: string;
+}
+
+async function loadExportConfigFromGithub(
+  buildReport: BuildReport,
+): Promise<ExportConfig> {
+  const info = await loadSubrepoFromGithub(
+    downstreamOcto,
+    downstreamRepo,
+    buildReport.commit_sha,
+    subrepo,
+  );
+  const sourceRepo = githubRepo(info.source_url);
+  const targetRepo = githubRepo(info.target_url);
+  return {
+    sourceRepo,
+    sourceRev: info.source_rev,
+    targetRepo,
+    targetBranch: info.target_rev,
+    prRepo: prRepoInput ?? targetRepo,
+    prBranch: prBranchInput ?? `${downstreamRepo.repo}-export`,
+  };
+}
+
 function isBuildReportGreen(report: BuildReport): boolean {
   const repoEntry = report.repos.find((r) => r.name === subrepo);
   return repoEntry?.green ?? false;
 }
 
-async function findExportPr(): Promise<ListPr | undefined> {
-  return await findPrFor(targetOcto, targetRepo, prBranch, {
+async function findExportPr(config: ExportConfig): Promise<ListPr | undefined> {
+  return await findPrFor(targetOcto, config.targetRepo, config.prBranch, {
     state: "open",
-    headOwner: prRepo.owner,
+    headOwner: config.prRepo.owner,
   });
 }
 
@@ -156,15 +182,6 @@ async function findBaseCommit(): Promise<BaseCommit> {
     subrepo,
   ]);
   return JSON.parse(result) as BaseCommit;
-}
-
-// The subrepo's rev from repos.toml, i.e. its current source branch.
-async function findSourceRev(): Promise<string> {
-  const result = await cCapture(scriptPath("list.py"), [
-    ...[".", subrepo, "--json"],
-  ]);
-  assert(result !== "", `Subrepo ${subrepo} not found in repos.toml`);
-  return (JSON.parse(result) as { rev: string }).rev;
 }
 
 // Fetch parts of a repo. Uses a blobless partial clone with full history since
@@ -245,17 +262,25 @@ async function runExport(onto: string): Promise<boolean> {
   return await isInterestingExport(onto);
 }
 
-async function updateSubrepo(sha: string): Promise<string | null> {
+async function updateSubrepo(
+  config: ExportConfig,
+  sha: string,
+): Promise<string | null> {
   await cRun("git", ["switch", "--detach", sha]);
 
   // Fetch both commits ourselves, update.py would fetch them shallowly.
   const baseCommit = await findBaseCommit();
-  const sourceRev = await findSourceRev();
 
-  await fetchFromRepo(sourceRepo, sourceToken, baseCommit.sha);
-  const sourceSha = await fetchFromRepo(sourceRepo, sourceToken, sourceRev);
+  await fetchFromRepo(config.sourceRepo, sourceToken, baseCommit.sha);
+  const sourceSha = await fetchFromRepo(
+    config.sourceRepo,
+    sourceToken,
+    config.sourceRev,
+  );
 
-  core.info(`Updating subrepo ${subrepo} to ${sourceRev} (${sourceSha})...`);
+  core.info(
+    `Updating subrepo ${subrepo} to ${config.sourceRev} (${sourceSha})...`,
+  );
   await cRun(scriptPath("update.py"), [
     ...[".", "--update", subrepo, "--update-to", subrepo, sourceSha],
   ]);
@@ -266,11 +291,14 @@ async function updateSubrepo(sha: string): Promise<string | null> {
   return await cCapture("git", ["rev-parse", "HEAD"]);
 }
 
-async function exportSameBranch(sha: string): Promise<boolean> {
+async function exportSameBranch(
+  config: ExportConfig,
+  sha: string,
+): Promise<boolean> {
   // Ensure there are no relevant upstream changes since our last update,
   // otherwise we'd sometimes do unnecessary work like opening a new export PR
   // immediately after the last one was merged.
-  const updatedSha = await updateSubrepo(sha);
+  const updatedSha = await updateSubrepo(config, sha);
   if (updatedSha === null)
     exit(
       `Subrepo ${subrepo} is outdated (upstream has relevant changes since the last update), stopping.`,
@@ -279,7 +307,11 @@ async function exportSameBranch(sha: string): Promise<boolean> {
 
   await cRun("git", ["switch", "--detach", updatedSha]);
   const baseCommit = await findBaseCommit();
-  const baseSha = await fetchFromRepo(sourceRepo, sourceToken, baseCommit.sha);
+  const baseSha = await fetchFromRepo(
+    config.sourceRepo,
+    sourceToken,
+    baseCommit.sha,
+  );
   return await runExport(baseSha);
 }
 
@@ -320,15 +352,28 @@ async function mergeSource(sha: string, message: string): Promise<void> {
   await cRun("git", ["commit", "--amend", "--no-edit"]);
 }
 
-async function exportTargetBranch(sha: string): Promise<boolean> {
+async function exportTargetBranch(
+  config: ExportConfig,
+  sha: string,
+): Promise<boolean> {
   await cRun("git", ["switch", "--detach", sha]);
   const baseCommit = await findBaseCommit();
   // Make sure to fetch both, else the merge may fail to find the sha
-  const baseSha = await fetchFromRepo(sourceRepo, sourceToken, baseCommit.sha);
-  const targetSha = await fetchFromRepo(targetRepo, targetToken, targetBranch);
+  const baseSha = await fetchFromRepo(
+    config.sourceRepo,
+    sourceToken,
+    baseCommit.sha,
+  );
+  const targetSha = await fetchFromRepo(
+    config.targetRepo,
+    targetToken,
+    config.targetBranch,
+  );
 
   // Merge source branch, resolving conflicts in favor of the source branch
-  core.info(`Merging ${baseCommit.rev} (${baseSha}) into ${targetBranch}...`);
+  core.info(
+    `Merging ${baseCommit.rev} (${baseSha}) into ${config.targetBranch}...`,
+  );
   await cRun("git", ["switch", "--detach", targetSha]);
   await mergeSource(baseSha, `chore: merge '${baseCommit.rev}'`);
   const mergeSha = await cCapture("git", ["rev-parse", "HEAD"]);
@@ -339,16 +384,26 @@ async function exportTargetBranch(sha: string): Promise<boolean> {
 
   // Push merge commit now, to prepare the branch for the export PR
   if (interesting && pr) {
-    core.info(`Pushing merge commit ${mergeSha} to ${targetBranch}...`);
-    await pushToRepo(targetRepo, targetToken, mergeSha, targetBranch);
+    core.info(`Pushing merge commit ${mergeSha} to ${config.targetBranch}...`);
+    await pushToRepo(
+      config.targetRepo,
+      targetToken,
+      mergeSha,
+      config.targetBranch,
+    );
   }
 
   return interesting;
 }
 
-async function createExportPr(buildReport: BuildReport): Promise<number> {
-  core.info(`Pushing export commit(s) to ${prRepo.fullName}:${prBranch}...`);
-  await pushToRepo(prRepo, prToken, "HEAD", prBranch, true);
+async function createExportPr(
+  config: ExportConfig,
+  buildReport: BuildReport,
+): Promise<number> {
+  core.info(
+    `Pushing export commit(s) to ${config.prRepo.fullName}:${config.prBranch}...`,
+  );
+  await pushToRepo(config.prRepo, prToken, "HEAD", config.prBranch, true);
 
   let body = prBody;
   if (!body) {
@@ -359,12 +414,12 @@ async function createExportPr(buildReport: BuildReport): Promise<number> {
   if (prExplanation) body += `\n\n${prExplanation}`;
 
   core.info(
-    `Creating export PR against ${targetRepo.fullName}:${targetBranch}...`,
+    `Creating export PR against ${config.targetRepo.fullName}:${config.targetBranch}...`,
   );
   const { data } = await targetOcto.rest.pulls.create({
-    ...targetRepo,
-    base: targetBranch,
-    head: `${prRepo.owner}:${prBranch}`,
+    ...config.targetRepo,
+    base: config.targetBranch,
+    head: `${config.prRepo.owner}:${config.prBranch}`,
     title: prTitle,
     body,
   });
@@ -381,9 +436,13 @@ async function run(): Promise<void> {
   if (!isBuildReportGreen(buildReport))
     exit(`Build report for ${subrepo} is not green, stopping.`, "notice");
 
+  // The info from repos.toml is necessary to find existing PRs, but we want to
+  // avoid always cloning the entire repo.
+  const config = await loadExportConfigFromGithub(buildReport);
+
   // Don't export if a PR already exists.
   if (pr) {
-    const existingPr = await findExportPr();
+    const existingPr = await findExportPr(config);
     if (existingPr !== undefined) {
       core.setOutput("pr-number", existingPr.number);
       exit(
@@ -409,19 +468,24 @@ async function run(): Promise<void> {
   core.info(`Exporting using method "${method}"...`);
   const interesting =
     method === "same-branch"
-      ? await exportSameBranch(buildReport.commit_sha)
-      : await exportTargetBranch(buildReport.commit_sha);
+      ? await exportSameBranch(config, buildReport.commit_sha)
+      : await exportTargetBranch(config, buildReport.commit_sha);
 
   // Create export PR or push to target branch, depending on settings
   if (interesting) {
     if (pr) {
-      const prNumber = await createExportPr(buildReport);
+      const prNumber = await createExportPr(config, buildReport);
       core.setOutput("pr-created", true);
       core.setOutput("pr-number", prNumber);
     } else {
-      await pushToRepo(targetRepo, targetToken, "HEAD", targetBranch);
+      await pushToRepo(
+        config.targetRepo,
+        targetToken,
+        "HEAD",
+        config.targetBranch,
+      );
       core.notice(
-        `Pushed export directly to ${targetRepo.fullName}:${targetBranch}.`,
+        `Pushed export directly to ${config.targetRepo.fullName}:${config.targetBranch}.`,
       );
     }
   } else {
