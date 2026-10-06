@@ -41,7 +41,8 @@ jobs:
       - name: Check that dist/ is up to date
         run: |
           pnpm build
-          git diff --exit-code -- 'actions/*/dist'
+          git add --intent-to-add -- ':(glob)actions/*/dist/**'
+          git diff --exit-code -- ':(glob)actions/*/dist/**'
 
   actionlint:
     name: Lint workflow files
