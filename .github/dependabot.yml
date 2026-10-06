@@ -7,6 +7,11 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    ignore:
+      # Keep in sync with the node24 runtime in actions/*/action.yml.
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
     groups:
       npm-minor-and-patch:
         update-types:
